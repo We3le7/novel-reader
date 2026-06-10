@@ -145,6 +145,16 @@ go run . open 3
 章节跳转说明：
 - 跳章后会将章节标题行定位到阅读区顶部。
 
+章节对齐策略（可配置）：
+- `NOVEL_READER_CHAPTER_ALIGN=strict`（默认）：跳转后会强制校正，确保可见顶部是章节标题。
+- `NOVEL_READER_CHAPTER_ALIGN=lenient`：按章节索引直接跳转。
+
+示例：
+
+```bash
+NOVEL_READER_CHAPTER_ALIGN=strict go run . open xishen/我不是戏神\(1001-1500章\).txt
+```
+
 ### 5.2 恐慌模式（Boss Key）
 - `Esc` 或 `q`：进入恐慌模式（伪日志流）
 - 在恐慌模式中再次 `Esc` 或 `q`：返回阅读模式

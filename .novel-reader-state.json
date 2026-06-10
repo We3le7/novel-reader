@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "updated_at": "2026-06-10T09:17:58Z",
+  "updated_at": "2026-06-10T09:56:42Z",
   "last_file": "/Users/xpeng/novel-reader/xishen/我不是戏神(1001-1500章).txt",
   "profiles": {
     "/Users/xpeng/novel-reader/xishen/我不是戏神(1001-1500章).txt": {
-      "byte_offset": 267063,
-      "line_offset": 2667,
+      "byte_offset": 2221379,
+      "line_offset": 21096,
       "total_lines": 32207,
       "window": {
-        "width": 56,
-        "height": 22
+        "width": 80,
+        "height": 25
       },
       "theme": "dracula",
       "panic_key": "esc"

@@ -368,10 +368,70 @@ func (m model) renderFooter() string {
 	right := m.styles.muted.Render("keys: j/k n/p [/] space/b esc q")
 	line := lipgloss.JoinHorizontal(lipgloss.Left, left, "  ", right)
 
-	meta := fmt.Sprintf("offset=%d line=%d file=%s", m.currentByteOffset(), m.currentLine(), filepath.Base(m.filePath))
+	meta := fmt.Sprintf(
+		"offset=%d line=%d top=%d file=%s chapter=%s topText=%s",
+		m.currentByteOffset(),
+		m.currentLine(),
+		m.readerVP.YOffset,
+		filepath.Base(m.filePath),
+		m.currentChapterLabel(),
+		m.currentTopLinePreview(36),
+	)
 	metaLine := m.styles.muted.Render(meta)
 
 	return lipgloss.JoinVertical(lipgloss.Left, line, metaLine)
+}
+
+func (m model) currentTopLinePreview(maxLen int) string {
+	if len(m.lines) == 0 || maxLen <= 0 {
+		return "N/A"
+	}
+
+	line := clamp(m.readerVP.YOffset, 0, len(m.lines)-1)
+	text := strings.TrimSpace(m.lines[line])
+	text = strings.TrimPrefix(text, "//")
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "N/A"
+	}
+
+	runes := []rune(text)
+	if len(runes) <= maxLen {
+		return text
+	}
+	if maxLen <= 3 {
+		return string(runes[:maxLen])
+	}
+	return string(runes[:maxLen-3]) + "..."
+}
+
+func (m model) currentChapterLabel() string {
+	if len(m.chapterLines) == 0 || len(m.lines) == 0 {
+		return "N/A"
+	}
+
+	anchor := clamp(m.currentLine(), 0, len(m.lines)-1)
+	idx := -1
+	for i, line := range m.chapterLines {
+		if line <= anchor {
+			idx = i
+			continue
+		}
+		break
+	}
+
+	if idx < 0 || idx >= len(m.chapterLines) {
+		return "N/A"
+	}
+
+	heading := strings.TrimSpace(m.lines[m.chapterLines[idx]])
+	heading = strings.TrimPrefix(heading, "//")
+	heading = strings.TrimSpace(heading)
+	if heading == "" {
+		return "N/A"
+	}
+
+	return heading
 }
 
 func (m *model) jumpChapter(direction int) bool {
@@ -389,20 +449,35 @@ func (m *model) jumpChapter(direction int) bool {
 		break
 	}
 
-	targetIdx := currentChapterIdx
-	if direction > 0 {
-		targetIdx = currentChapterIdx + 1
-	} else if direction < 0 {
-		targetIdx = currentChapterIdx - 1
+	if currentChapterIdx == -1 {
+		// 如果在第一章之前，向下按去第一章，向上按不动
+		if direction > 0 {
+			m.setReaderTopLine(m.chapterLines[0])
+			return true
+		}
+		return false
 	}
 
+	var targetIdx int
+	if direction > 0 {
+		// 下一章
+		targetIdx = currentChapterIdx + 1
+	} else {
+		// 上一章逻辑优化：
+		// 如果当前行已经非常接近（或就在）当前章的开头，则跳到上一章
+		// 否则，先回到当前章的开头
+		if anchor <= m.chapterLines[currentChapterIdx]+chapterAlignScan {
+			targetIdx = currentChapterIdx - 1
+		} else {
+			targetIdx = currentChapterIdx
+		}
+	}
+
+	// 边界检查
 	if targetIdx < 0 || targetIdx >= len(m.chapterLines) {
 		return false
 	}
 	targetLine := m.chapterLines[targetIdx]
-	if aligned, ok := m.findNearestChapterLineAround(targetLine, chapterAlignScan); ok {
-		targetLine = aligned
-	}
 	m.setReaderTopLine(targetLine)
 	return true
 }
@@ -432,11 +507,13 @@ func (m *model) findNearestChapterLineAround(center, radius int) (int, bool) {
 }
 
 func (m *model) setReaderTopLine(line int) {
-	line = clamp(line, 0, len(m.lines)-1)
-	m.readerVP.GotoTop()
-	if line > 0 {
-		m.readerVP.LineDown(line)
+	if len(m.lines) == 0 {
+		m.readerVP.YOffset = 0
+		return
 	}
+	line = clamp(line, 0, len(m.lines)-1)
+	// 直接设置 YOffset 性能最好且最精准
+	m.readerVP.YOffset = line
 }
 
 func buildChapterLineIndex(lines []string) []int {
@@ -451,6 +528,10 @@ func buildChapterLineIndex(lines []string) []int {
 
 func isChapterHeadingLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
+	// 去掉可能存在的代码伪装前缀，防止切章失效
+	trimmed = strings.TrimPrefix(trimmed, "//")
+	trimmed = strings.TrimSpace(trimmed)
+
 	if trimmed == "" {
 		return false
 	}
