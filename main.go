@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -95,6 +96,8 @@ type model struct {
 	err      error
 
 	chapterLines []int
+	contentWidth int
+	lineOffsets  []int
 
 	styles styles
 }
@@ -115,10 +118,10 @@ type styles struct {
 }
 
 func newStyles() styles {
-	accent := lipgloss.Color("#6272A4")
-	muted := lipgloss.Color("#7080B5")
-	warn := lipgloss.Color("#E6DB74")
-	border := lipgloss.Color("#3B4261")
+	accent := lipgloss.Color("#748199")
+	muted := lipgloss.Color("#6E7688")
+	warn := lipgloss.Color("#A6946A")
+	border := lipgloss.Color("#4E5564")
 
 	return styles{
 		appBorder: lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).BorderForeground(border),
@@ -127,7 +130,7 @@ func newStyles() styles {
 		body:      lipgloss.NewStyle().Foreground(accent).Padding(0, 1),
 		muted:     lipgloss.NewStyle().Foreground(muted),
 		warn:      lipgloss.NewStyle().Foreground(warn),
-		errorLine: lipgloss.NewStyle().Foreground(lipgloss.Color("#FF5555")),
+		errorLine: lipgloss.NewStyle().Foreground(lipgloss.Color("#B07A7A")),
 	}
 }
 
@@ -135,12 +138,12 @@ func initialModel(filePath string, lines []string, lineByte []int64, startLine i
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	readerVP := viewport.New(0, 0)
 	panicVP := viewport.New(0, 0)
-	pg := progress.New(progress.WithSolidFill("#8BE9FD"), progress.WithWidth(28), progress.WithoutPercentage())
+	pg := progress.New(progress.WithSolidFill("#7A869C"), progress.WithWidth(28), progress.WithoutPercentage())
 
 	st := newStyles()
 	pg.Full = '='
 	pg.Empty = '-'
-	pg.EmptyColor = "#3B4261"
+	pg.EmptyColor = "#555D6C"
 
 	m := model{
 		state:        stateReading,
@@ -162,7 +165,7 @@ func initialModel(filePath string, lines []string, lineByte []int64, startLine i
 	}
 
 	if len(lines) > 0 {
-		m.readerVP.SetContent(disguiseLines(lines))
+		// m.readerVP.SetContent(disguiseLines(lines))
 		m.setReaderTopLine(clamp(startLine, 0, len(lines)-1))
 	}
 
@@ -292,18 +295,43 @@ func (m *model) layoutViewport() {
 	if m.width <= 0 || m.height <= 0 {
 		return
 	}
+	percent := m.readingPercent()
+	anchorSourceLine := m.currentLine()
 	bodyHeight := m.height - m.headerHeight - m.footerHeight - 2
 	if bodyHeight < 3 {
 		bodyHeight = 3
 	}
-	bodyWidth := m.width - 4
-	if bodyWidth < 20 {
-		bodyWidth = 20
-	}
+	bodyWidth := m.readerContentWidth()
 	m.readerVP.Width = bodyWidth
 	m.readerVP.Height = bodyHeight
 	m.panicVP.Width = bodyWidth
 	m.panicVP.Height = bodyHeight
+	contentWidth := contentWrapWidth(bodyWidth)
+
+	m.readerVP.SetContent(disguiseLines(m.lines, bodyWidth))
+	m.rebuildLineOffsets(contentWidth)
+	if len(m.lines) == 0 {
+		m.readerVP.YOffset = 0
+		return
+	}
+
+	anchorSourceLine = clamp(anchorSourceLine, 0, len(m.lines)-1)
+	m.readerVP.YOffset = m.sourceLineToVisualOffset(anchorSourceLine)
+
+	// 百分比仅作为兜底：当映射结果异常时，尽量回到接近原进度的位置。
+	if m.readerVP.YOffset < 0 {
+		sourceLineByPercent := clamp(int(percent*float64(max(1, len(m.lines)-1))), 0, len(m.lines)-1)
+		m.readerVP.YOffset = m.sourceLineToVisualOffset(sourceLineByPercent)
+	}
+
+	maxVisualOffset := max(0, m.totalVisualLines()-1)
+	m.readerVP.YOffset = clamp(m.readerVP.YOffset, 0, maxVisualOffset)
+}
+
+func (m model) readerContentWidth() int {
+	totalBodyWidth := max(20, m.width-4)
+	contentWidth := totalBodyWidth - m.styles.body.GetHorizontalFrameSize()
+	return max(5, contentWidth)
 }
 
 func (m *model) appendPanicLogLine() {
@@ -367,42 +395,36 @@ func (m model) renderFooter() string {
 	left := m.styles.footer.Render(status + " " + bar)
 	right := m.styles.muted.Render("keys: j/k n/p [/] space/b esc q")
 	line := lipgloss.JoinHorizontal(lipgloss.Left, left, "  ", right)
+	fileHint := subtleTail(filepath.Base(m.filePath), 18)
+	chapterHint := subtleTail(m.currentChapterLabel(), 22)
 
 	meta := fmt.Sprintf(
-		"offset=%d line=%d top=%d file=%s chapter=%s topText=%s",
+		"offset=%d line=%d top=%d  ·  f:%s  c:%s",
 		m.currentByteOffset(),
 		m.currentLine(),
 		m.readerVP.YOffset,
-		filepath.Base(m.filePath),
-		m.currentChapterLabel(),
-		m.currentTopLinePreview(36),
+		fileHint,
+		chapterHint,
 	)
 	metaLine := m.styles.muted.Render(meta)
 
 	return lipgloss.JoinVertical(lipgloss.Left, line, metaLine)
 }
 
-func (m model) currentTopLinePreview(maxLen int) string {
-	if len(m.lines) == 0 || maxLen <= 0 {
-		return "N/A"
+func subtleTail(s string, maxLen int) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "-"
 	}
-
-	line := clamp(m.readerVP.YOffset, 0, len(m.lines)-1)
-	text := strings.TrimSpace(m.lines[line])
-	text = strings.TrimPrefix(text, "//")
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return "N/A"
+	if maxLen <= 1 {
+		return s
 	}
-
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return text
+	r := []rune(s)
+	if len(r) <= maxLen {
+		return s
 	}
-	if maxLen <= 3 {
-		return string(runes[:maxLen])
-	}
-	return string(runes[:maxLen-3]) + "..."
+	keep := maxLen - 1
+	return "…" + string(r[len(r)-keep:])
 }
 
 func (m model) currentChapterLabel() string {
@@ -439,7 +461,7 @@ func (m *model) jumpChapter(direction int) bool {
 		return false
 	}
 
-	anchor := clamp(m.readerVP.YOffset+chapterAnchorBias, 0, len(m.lines)-1)
+	anchor := clamp(m.currentLine()+chapterAnchorBias, 0, len(m.lines)-1)
 	currentChapterIdx := -1
 	for i, line := range m.chapterLines {
 		if line <= anchor {
@@ -482,38 +504,20 @@ func (m *model) jumpChapter(direction int) bool {
 	return true
 }
 
-func (m *model) findNearestChapterLineAround(center, radius int) (int, bool) {
-	if len(m.lines) == 0 {
-		return 0, false
-	}
-	center = clamp(center, 0, len(m.lines)-1)
-
-	if isChapterHeadingLine(m.lines[center]) {
-		return center, true
-	}
-
-	for d := 1; d <= radius; d++ {
-		up := center - d
-		if up >= 0 && isChapterHeadingLine(m.lines[up]) {
-			return up, true
-		}
-		down := center + d
-		if down < len(m.lines) && isChapterHeadingLine(m.lines[down]) {
-			return down, true
-		}
-	}
-
-	return 0, false
-}
-
 func (m *model) setReaderTopLine(line int) {
 	if len(m.lines) == 0 {
 		m.readerVP.YOffset = 0
 		return
 	}
 	line = clamp(line, 0, len(m.lines)-1)
-	// 直接设置 YOffset 性能最好且最精准
-	m.readerVP.YOffset = line
+	if len(m.lineOffsets) == 0 {
+		wrapWidth := m.readerVP.Width
+		if wrapWidth <= 0 {
+			wrapWidth = max(20, m.width-4)
+		}
+		m.rebuildLineOffsets(contentWrapWidth(wrapWidth))
+	}
+	m.readerVP.YOffset = m.sourceLineToVisualOffset(line)
 }
 
 func buildChapterLineIndex(lines []string) []int {
@@ -547,10 +551,56 @@ func (m model) readingPercent() float64 {
 }
 
 func (m model) currentLine() int {
-	if m.state == stateBossPanic {
-		return m.readerVP.YOffset
+	if len(m.lines) == 0 {
+		return 0
 	}
-	return m.readerVP.YOffset
+	if len(m.lineOffsets) <= 1 {
+		return clamp(m.readerVP.YOffset, 0, len(m.lines)-1)
+	}
+	visualOffset := m.readerVP.YOffset
+	if visualOffset <= 0 {
+		return 0
+	}
+	idx := sort.Search(len(m.lineOffsets), func(i int) bool {
+		return m.lineOffsets[i] > visualOffset
+	}) - 1
+	if idx < 0 {
+		return 0
+	}
+	if idx >= len(m.lines) {
+		return len(m.lines) - 1
+	}
+	return idx
+}
+
+func (m *model) rebuildLineOffsets(contentWidth int) {
+	m.contentWidth = max(1, contentWidth)
+	m.lineOffsets = make([]int, len(m.lines)+1)
+	acc := 0
+	for i, line := range m.lines {
+		m.lineOffsets[i] = acc
+		acc += wrappedVisualLineCount(line, m.contentWidth)
+	}
+	m.lineOffsets[len(m.lines)] = acc
+}
+
+func (m model) sourceLineToVisualOffset(sourceLine int) int {
+	if len(m.lines) == 0 {
+		return 0
+	}
+	if len(m.lineOffsets) != len(m.lines)+1 {
+		sourceLine = clamp(sourceLine, 0, len(m.lines)-1)
+		return sourceLine
+	}
+	sourceLine = clamp(sourceLine, 0, len(m.lines)-1)
+	return m.lineOffsets[sourceLine]
+}
+
+func (m model) totalVisualLines() int {
+	if len(m.lineOffsets) == 0 {
+		return 0
+	}
+	return m.lineOffsets[len(m.lineOffsets)-1]
 }
 
 func (m model) currentByteOffset() int64 {
@@ -845,16 +895,116 @@ func loadLines(path string) ([]string, []int64, error) {
 	return lines, bytes, nil
 }
 
-func disguiseLines(lines []string) string {
-	out := make([]string, 0, len(lines))
+func disguiseLines(lines []string, maxWidth int) string {
+	if len(lines) == 0 {
+		return ""
+	}
+
+	prefix := "// "
+	contentMaxWidth := contentWrapWidth(maxWidth)
+
+	out := make([]string, 0, len(lines)*2)
 	for _, l := range lines {
-		if strings.TrimSpace(l) == "" {
-			out = append(out, "")
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
+			out = append(out, prefix)
 			continue
 		}
-		out = append(out, "// "+l)
+
+		for _, chunk := range wrapTextByVisualWidth(trimmed, contentMaxWidth) {
+			out = append(out, prefix+chunk)
+		}
 	}
 	return strings.Join(out, "\n")
+}
+
+func contentWrapWidth(viewportWidth int) int {
+	return max(5, viewportWidth-lipgloss.Width("// "))
+}
+
+func wrapTextByVisualWidth(s string, maxWidth int) []string {
+	if maxWidth <= 0 {
+		return []string{""}
+	}
+	if s == "" {
+		return []string{""}
+	}
+
+	parts := make([]string, 0, 1)
+	var b strings.Builder
+	currentWidth := 0
+
+	for _, r := range s {
+		rw := lipgloss.Width(string(r))
+		if rw <= 0 {
+			rw = 1
+		}
+		if currentWidth+rw > maxWidth && b.Len() > 0 {
+			parts = append(parts, b.String())
+			b.Reset()
+			currentWidth = 0
+		}
+		b.WriteRune(r)
+		currentWidth += rw
+	}
+
+	if b.Len() > 0 {
+		parts = append(parts, b.String())
+	}
+	if len(parts) == 0 {
+		return []string{""}
+	}
+	return parts
+}
+
+func wrappedVisualLineCount(line string, maxWidth int) int {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return 1
+	}
+	return len(wrapTextByVisualWidth(trimmed, maxWidth))
+}
+
+func totalVisualLines(lines []string, maxWidth int) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	total := 0
+	for _, line := range lines {
+		total += wrappedVisualLineCount(line, maxWidth)
+	}
+	return total
+}
+
+func sourceLineToVisualOffset(lines []string, maxWidth, sourceLine int) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	sourceLine = clamp(sourceLine, 0, len(lines)-1)
+	offset := 0
+	for i := 0; i < sourceLine; i++ {
+		offset += wrappedVisualLineCount(lines[i], maxWidth)
+	}
+	return offset
+}
+
+func visualOffsetToSourceLine(lines []string, maxWidth, visualOffset int) int {
+	if len(lines) == 0 {
+		return 0
+	}
+	if visualOffset <= 0 {
+		return 0
+	}
+
+	remaining := visualOffset
+	for i, line := range lines {
+		rows := wrappedVisualLineCount(line, maxWidth)
+		if remaining < rows {
+			return i
+		}
+		remaining -= rows
+	}
+	return len(lines) - 1
 }
 
 func runReader(filePath string) error {
