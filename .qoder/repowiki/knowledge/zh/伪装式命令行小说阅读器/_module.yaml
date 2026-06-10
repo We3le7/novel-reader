@@ -1,0 +1,19 @@
+schema_version: 1
+module_path: ""
+title: 伪装式命令行小说阅读器
+scope:
+    - .gitignore
+    - README.md
+    - USAGE.md
+    - cli.go
+    - go.mod
+    - go.sum
+    - main.go
+    - source.go
+    - .novel-reader-scan.json
+    - .novel-reader-state.json
+    - SDD.md
+    - novel-reader
+source_files: []
+depends_on: []
+related_to: []

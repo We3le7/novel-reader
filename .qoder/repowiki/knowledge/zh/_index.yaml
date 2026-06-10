@@ -1,0 +1,26 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: main
+exported_at: "2026-06-10T11:50:28Z"
+modules:
+    "":
+        dir_name: 伪装式命令行小说阅读器
+        title: 伪装式命令行小说阅读器
+        scope:
+            - .gitignore
+            - README.md
+            - USAGE.md
+            - cli.go
+            - go.mod
+            - go.sum
+            - main.go
+            - source.go
+            - .novel-reader-scan.json
+            - .novel-reader-state.json
+            - SDD.md
+            - novel-reader
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
