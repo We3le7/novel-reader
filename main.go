@@ -28,6 +28,7 @@ const (
 	snapshotVersion   = 1
 	maxPanicLogLines  = 1000
 	chapterAnchorBias = 0
+	chapterAlignScan  = 8
 )
 
 type snapshotFile struct {
@@ -162,7 +163,7 @@ func initialModel(filePath string, lines []string, lineByte []int64, startLine i
 
 	if len(lines) > 0 {
 		m.readerVP.SetContent(disguiseLines(lines))
-		m.readerVP.SetYOffset(clamp(startLine, 0, len(lines)-1))
+		m.setReaderTopLine(clamp(startLine, 0, len(lines)-1))
 	}
 
 	m.panicLogs = []string{
@@ -398,22 +399,62 @@ func (m *model) jumpChapter(direction int) bool {
 	if targetIdx < 0 || targetIdx >= len(m.chapterLines) {
 		return false
 	}
-	m.readerVP.SetYOffset(m.chapterLines[targetIdx])
+	targetLine := m.chapterLines[targetIdx]
+	if aligned, ok := m.findNearestChapterLineAround(targetLine, chapterAlignScan); ok {
+		targetLine = aligned
+	}
+	m.setReaderTopLine(targetLine)
 	return true
+}
+
+func (m *model) findNearestChapterLineAround(center, radius int) (int, bool) {
+	if len(m.lines) == 0 {
+		return 0, false
+	}
+	center = clamp(center, 0, len(m.lines)-1)
+
+	if isChapterHeadingLine(m.lines[center]) {
+		return center, true
+	}
+
+	for d := 1; d <= radius; d++ {
+		up := center - d
+		if up >= 0 && isChapterHeadingLine(m.lines[up]) {
+			return up, true
+		}
+		down := center + d
+		if down < len(m.lines) && isChapterHeadingLine(m.lines[down]) {
+			return down, true
+		}
+	}
+
+	return 0, false
+}
+
+func (m *model) setReaderTopLine(line int) {
+	line = clamp(line, 0, len(m.lines)-1)
+	m.readerVP.GotoTop()
+	if line > 0 {
+		m.readerVP.LineDown(line)
+	}
 }
 
 func buildChapterLineIndex(lines []string) []int {
 	idx := make([]int, 0, 128)
 	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-		if chapterCNPattern.MatchString(trimmed) || chapterENPattern.MatchString(trimmed) {
+		if isChapterHeadingLine(line) {
 			idx = append(idx, i)
 		}
 	}
 	return idx
+}
+
+func isChapterHeadingLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return false
+	}
+	return chapterCNPattern.MatchString(trimmed) || chapterENPattern.MatchString(trimmed)
 }
 
 func (m model) readingPercent() float64 {
