@@ -612,7 +612,8 @@ func (m model) currentByteOffset() int64 {
 }
 
 func nextPanicTickCmd(r *rand.Rand) tea.Cmd {
-	d := time.Duration(80+r.Intn(180)) * time.Millisecond
+	// Slow down panic-mode progress/log updates to make the animation less aggressive.
+	d := time.Duration(220+r.Intn(260)) * time.Millisecond
 	return tea.Tick(d, func(time.Time) tea.Msg {
 		return panicTickMsg{}
 	})
