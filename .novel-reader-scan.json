@@ -1,0 +1,24 @@
+{
+  "root": "/Users/xpeng/novel-reader",
+  "updated_at": "2026-06-10T08:40:02Z",
+  "items": [
+    {
+      "id": "examples/demo.txt",
+      "title": "demo",
+      "path": "/Users/xpeng/novel-reader/examples/demo.txt",
+      "source": "local"
+    },
+    {
+      "id": "xishen/我不是戏神(1001-1500章).txt",
+      "title": "我不是戏神(1001-1500章)",
+      "path": "/Users/xpeng/novel-reader/xishen/我不是戏神(1001-1500章).txt",
+      "source": "local"
+    },
+    {
+      "id": "xishen/我不是戏神(1501-1925章).txt",
+      "title": "我不是戏神(1501-1925章)",
+      "path": "/Users/xpeng/novel-reader/xishen/我不是戏神(1501-1925章).txt",
+      "source": "local"
+    }
+  ]
+}
