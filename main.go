@@ -360,9 +360,11 @@ func (m model) View() string {
 	}
 	header := m.renderHeader()
 	body := m.renderBody()
-	footer := m.renderFooter()
-
-	ui := lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	ui := lipgloss.JoinVertical(lipgloss.Left, header, body)
+	if m.state != stateBossPanic {
+		footer := m.renderFooter()
+		ui = lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
+	}
 	return m.styles.appBorder.Width(m.width - 2).Render(ui)
 }
 
