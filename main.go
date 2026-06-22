@@ -1,9 +1,10 @@
 package main
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -11,11 +12,15 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 )
 
 type readerState int
@@ -868,32 +873,134 @@ func loadStartPosition(filePath string) int {
 }
 
 func loadLines(path string) ([]string, []int64, error) {
-	f, err := os.Open(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
 	}
-	defer f.Close()
-
-	s := bufio.NewScanner(f)
-	buf := make([]byte, 0, 64*1024)
-	s.Buffer(buf, 4*1024*1024)
-
-	var lines []string
-	var bytes []int64
-	var offset int64
-	for s.Scan() {
-		line := s.Text()
-		lines = append(lines, line)
-		bytes = append(bytes, offset)
-		offset += int64(len(line)) + 1
-	}
-	if err := s.Err(); err != nil {
+	decoded, err := decodeTextToUTF8(data)
+	if err != nil {
 		return nil, nil, err
 	}
-	if len(lines) == 0 {
-		return []string{"(empty file)"}, []int64{0}, nil
+	return splitLinesWithOffsets(decoded), buildLineByteOffsets(decoded), nil
+}
+
+func decodeTextToUTF8(data []byte) (string, error) {
+	if len(data) == 0 {
+		return "", nil
 	}
-	return lines, bytes, nil
+
+	// UTF-16 BOM detection.
+	if len(data) >= 2 {
+		if data[0] == 0xFF && data[1] == 0xFE {
+			return decodeUTF16(data[2:], true), nil
+		}
+		if data[0] == 0xFE && data[1] == 0xFF {
+			return decodeUTF16(data[2:], false), nil
+		}
+	}
+
+	if utf8.Valid(data) {
+		return string(data), nil
+	}
+
+	// Heuristic: many NUL bytes usually means UTF-16 without BOM.
+	nulEven, nulOdd := countNULByParity(data)
+	if nulOdd > nulEven*2 {
+		return decodeUTF16(data, true), nil
+	}
+	if nulEven > nulOdd*2 {
+		return decodeUTF16(data, false), nil
+	}
+
+	// Common fallback for Chinese plain text novels.
+	if gb, gbErr := decodeGB18030(data); gbErr == nil {
+		return gb, nil
+	}
+
+	return "", fmt.Errorf("unsupported text encoding")
+}
+
+func decodeUTF16(data []byte, littleEndian bool) string {
+	if len(data)%2 != 0 {
+		data = data[:len(data)-1]
+	}
+	if len(data) == 0 {
+		return ""
+	}
+
+	units := make([]uint16, len(data)/2)
+	for i := 0; i < len(units); i++ {
+		b0 := data[i*2]
+		b1 := data[i*2+1]
+		if littleEndian {
+			units[i] = uint16(b0) | uint16(b1)<<8
+		} else {
+			units[i] = uint16(b1) | uint16(b0)<<8
+		}
+	}
+
+	runes := utf16.Decode(units)
+	return string(runes)
+}
+
+func decodeGB18030(data []byte) (string, error) {
+	reader := transform.NewReader(bytes.NewReader(data), simplifiedchinese.GB18030.NewDecoder())
+	decoded, err := io.ReadAll(reader)
+	if err != nil {
+		return "", err
+	}
+	return string(decoded), nil
+}
+
+func countNULByParity(data []byte) (even int, odd int) {
+	for i, b := range data {
+		if b != 0 {
+			continue
+		}
+		if i%2 == 0 {
+			even++
+		} else {
+			odd++
+		}
+	}
+	return even, odd
+}
+
+func splitLinesWithOffsets(content string) []string {
+	lines := strings.Split(content, "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSuffix(lines[i], "\r")
+	}
+	if len(lines) == 0 {
+		return []string{"(empty file)"}
+	}
+	if len(lines) == 1 && lines[0] == "" {
+		return []string{"(empty file)"}
+	}
+	return lines
+}
+
+func buildLineByteOffsets(content string) []int64 {
+	lines := strings.Split(content, "\n")
+	if len(lines) == 1 && lines[0] == "" {
+		return []int64{0}
+	}
+
+	offsets := make([]int64, 0, len(lines))
+	var offset int64
+	for i, line := range lines {
+		offsets = append(offsets, offset)
+		if i == len(lines)-1 {
+			offset += int64(len(line))
+			continue
+		}
+		offset += int64(len(line)) + 1
+	}
+
+	if len(offsets) == 0 {
+		return []int64{0}
+	}
+	return offsets
 }
 
 func disguiseLines(lines []string, maxWidth int) string {
